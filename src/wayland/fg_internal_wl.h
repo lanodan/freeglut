@@ -36,6 +36,8 @@
 #include <wayland-cursor.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "xdg-shell-client-protocol.h"
+
 
 /* -- GLOBAL TYPE DEFINITIONS ---------------------------------------------- */
 /* The structure used by display initialization in fg_init.c */
@@ -47,7 +49,7 @@ struct tagSFG_PlatformDisplay
     struct wl_display* display;        /* The display we are being run in    */
     struct wl_registry* registry;      /* The global interface registry      */
     struct wl_compositor* compositor;  /* The compositor                     */
-    struct wl_shell* shell;            /* The shell, AKA window manager      */
+    struct xdg_wm_base* xdg_wm_base;   /* Window management */
     struct wl_seat* seat;              /* The seat, references input devices */
 
     struct xkb_context* xkb_context;   /* The global XKB keyboard context    */
@@ -69,7 +71,10 @@ struct tagSFG_PlatformContext
     GLboolean pointer_button_pressed;
 
     struct wl_surface* surface;            /* The drawing surface             */
-    struct wl_shell_surface* shsurface;    /* The shell surface, has states   */
+    struct xdg_surface* xdg_surface;       /* The shell surface, has states   */
+    struct xdg_toplevel* xdg_toplevel;     /* The toplevel interace, has states */
+    struct xdg_popup* xdg_popup;           /* The popup/menu interace, has states */
+    struct xdg_positioner* xdg_positioner; /* The positioner interace, has states */
     struct wl_egl_window* egl_window;      /* Binding between WL/EGL surfaces */
 
     struct wl_cursor* cursor;              /* The active cursor */

@@ -34,27 +34,52 @@
 extern void fghOnReshapeNotify( SFG_Window *window, int width, int height, GLboolean forceNotify );
 void fgPlatformReshapeWindow( SFG_Window *window, int width, int height );
 void fgPlatformIconifyWindow( SFG_Window *window );
+void fgPlatformCloseWindow( SFG_Window* window );
 
 
-static void fghShSurfacePing( void* data,
-                           struct wl_shell_surface* shsurface,
-                           uint32_t serial )
-{
-    wl_shell_surface_pong( shsurface, serial );
-}
-static void fghShSurfaceConfigure( void* data,
-                                struct wl_shell_surface* shsurface,
-                                uint32_t edges,
-                                int32_t width, int32_t height )
+static void fghXdgSurfaceConfigure( void* data,
+                                    struct xdg_surface *xdg_surface,
+                                    uint32_t serial )
 {
     SFG_Window* window = data;
-    fgPlatformReshapeWindow( window, width, height );
+
+    printf("fghXdgSurfaceConfigure\n");
+
+    xdg_surface_ack_configure(xdg_surface, serial);
+
+    wl_surface_attach(window->Window.pContext.surface, NULL, 0, 0);
+    wl_surface_commit(window->Window.pContext.surface);
 }
-static const struct wl_shell_surface_listener fghShSurfaceListener =
+static const struct xdg_surface_listener fghXdgSurfaceListener =
 {
-    fghShSurfacePing,
-    fghShSurfaceConfigure,
-    NULL
+    .configure = fghXdgSurfaceConfigure,
+};
+
+static void fghXdgToplevelConfigure(void *data,
+                                    struct xdg_toplevel *xdg_toplevel,
+                                    int32_t width,
+                                    int32_t height,
+                                    struct wl_array *states)
+{
+    SFG_Window* window = data;
+
+    printf("fghXdgToplevelConfigure\n");
+
+    fgPlatformReshapeWindow( window, width, height );
+
+    wl_surface_commit(window->Window.pContext.surface);
+}
+
+static void fghXdgToplevelClose(void *data,
+                                struct xdg_toplevel *xdg_toplevel)
+{
+    SFG_Window* window = data;
+    fgPlatformCloseWindow(window);
+}
+
+static const struct xdg_toplevel_listener fghXdgToplevelListener = {
+    .configure = fghXdgToplevelConfigure,
+    .close = fghXdgToplevelClose,
 };
 
 
@@ -66,15 +91,13 @@ static int fghToggleFullscreen(void)
     {
       win->State.pWState.OldWidth = win->State.Width;
       win->State.pWState.OldHeight = win->State.Height;
-      wl_shell_surface_set_fullscreen( win->Window.pContext.shsurface,
-                                       WL_SHELL_SURFACE_FULLSCREEN_METHOD_DEFAULT,
-                                       0, NULL );
+      xdg_toplevel_set_fullscreen( win->Window.pContext.xdg_toplevel, NULL );
     }
     else
     {
       fgPlatformReshapeWindow( win, win->State.pWState.OldWidth,
                                     win->State.pWState.OldHeight );
-      wl_shell_surface_set_toplevel( win->Window.pContext.shsurface );
+      xdg_toplevel_unset_fullscreen( win->Window.pContext.xdg_toplevel );
     }
 
     return 0;
@@ -127,31 +150,32 @@ void fgPlatformOpenWindow( SFG_Window* window, const char* title,
                                         fgDisplay.pDisplay.compositor );
 
     /*  Create the shell surface with respects to the parent/child tree  */
-    window->Window.pContext.shsurface = wl_shell_get_shell_surface(
-                                          fgDisplay.pDisplay.shell,
+    window->Window.pContext.xdg_surface = xdg_wm_base_get_xdg_surface(
+                                          fgDisplay.pDisplay.xdg_wm_base,
                                            window->Window.pContext.surface );
-    wl_shell_surface_add_listener( window->Window.pContext.shsurface,
-                                   &fghShSurfaceListener, window );
+    xdg_surface_add_listener( window->Window.pContext.xdg_surface,
+                              &fghXdgSurfaceListener, window );
 
-    if( title)
-      wl_shell_surface_set_title( window->Window.pContext.shsurface, title );
-
-    if( gameMode )
+    if ( !isSubWindow && !window->IsMenu ) // toplevel
     {
+      window->Window.pContext.xdg_toplevel = xdg_surface_get_toplevel(window->Window.pContext.xdg_surface);
+      if ( gameMode ) // fullscreen
+      {
+        xdg_toplevel_set_fullscreen(window->Window.pContext.xdg_toplevel, NULL);
+        // Maybe should check if actually got fullscreened in ack_configure handler
         window->State.IsFullscreen = GL_TRUE;
-        wl_shell_surface_set_fullscreen( window->Window.pContext.shsurface,
-                                         WL_SHELL_SURFACE_FULLSCREEN_METHOD_DEFAULT,
-                                         0, NULL );
+      }
+      if( title )
+        xdg_toplevel_set_title( window->Window.pContext.xdg_toplevel, title );
     }
-    else if( !isSubWindow && !window->IsMenu )
+    else // popup / menu
     {
-        wl_shell_surface_set_toplevel( window->Window.pContext.shsurface );
-    }
-    else
-    {
-        wl_shell_surface_set_transient( window->Window.pContext.shsurface,
-                                        window->Parent->Window.pContext.surface,
-                                        x, y, 0 );
+      window->Window.pContext.xdg_positioner = xdg_wm_base_create_positioner(fgDisplay.pDisplay.xdg_wm_base);
+      xdg_positioner_set_size( window->Window.pContext.xdg_positioner, w, h );
+      xdg_positioner_set_anchor_rect( window->Window.pContext.xdg_positioner, x, y, w, h );
+      window->Window.pContext.xdg_popup = xdg_surface_get_popup( window->Window.pContext.xdg_surface,
+                                                                 window->Parent->Window.pContext.xdg_surface,
+                                                                 window->Window.pContext.xdg_positioner );
     }
 
     /*  Create the Wl_EGL_Window  */
@@ -167,7 +191,10 @@ void fgPlatformOpenWindow( SFG_Window* window, const char* title,
     eglMakeCurrent( fgDisplay.pDisplay.egl.Display, window->Window.pContext.egl.Surface,
                     window->Window.pContext.egl.Surface, window->Window.Context );
 
-   window->Window.pContext.pointer_button_pressed = GL_FALSE;
+    window->Window.pContext.pointer_button_pressed = GL_FALSE;
+
+    wl_display_roundtrip( fgDisplay.pDisplay.display );
+    wl_surface_commit(window->Window.pContext.surface);
 }
 
 
@@ -193,8 +220,14 @@ void fgPlatformCloseWindow( SFG_Window* window )
 
     if ( window->Window.pContext.egl_window )
       wl_egl_window_destroy( window->Window.pContext.egl_window );
-    if ( window->Window.pContext.shsurface )
-      wl_shell_surface_destroy( window->Window.pContext.shsurface );
+    if ( window->Window.pContext.xdg_toplevel )
+      xdg_toplevel_destroy( window->Window.pContext.xdg_toplevel );
+    if ( window->Window.pContext.xdg_popup )
+      xdg_popup_destroy( window->Window.pContext.xdg_popup );
+    if ( window->Window.pContext.xdg_positioner )
+      xdg_positioner_destroy( window->Window.pContext.xdg_positioner );
+    if ( window->Window.pContext.xdg_surface )
+      xdg_surface_destroy( window->Window.pContext.xdg_surface );
     if ( window->Window.pContext.surface )
       wl_surface_destroy( window->Window.pContext.surface );
     if ( window->Window.pContext.cursor_surface )
@@ -209,7 +242,7 @@ void fgPlatformCloseWindow( SFG_Window* window )
 void fgPlatformShowWindow( SFG_Window *window )
 {
     if ( ! window->Window.pContext.egl_window ||
-         ! window->Window.pContext.shsurface ||
+         ! window->Window.pContext.xdg_surface ||
          ! window->Window.pContext.surface)
     {
         fgPlatformCloseWindow( window );
@@ -260,7 +293,7 @@ void fgPlatformIconifyWindow( SFG_Window *window )
 void fgPlatformGlutSetWindowTitle( const char* title )
 {
     SFG_Window* win = fgStructure.CurrentWindow;
-    wl_shell_surface_set_title( win->Window.pContext.shsurface, title );
+    xdg_toplevel_set_title( win->Window.pContext.xdg_toplevel, title );
 }
 
 /*

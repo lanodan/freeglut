@@ -201,6 +201,7 @@ ELSE()
             src/wayland/fg_state_wl.c
             src/wayland/fg_structure_wl.c
             src/wayland/fg_window_wl.c
+            src/wayland/xdg-shell-protocol.c
             # font, serial port & joystick code are agnostic
             src/x11/fg_glutfont_definitions_x11.c
             src/x11/fg_input_devices_x11.c

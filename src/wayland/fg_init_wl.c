@@ -34,6 +34,16 @@
 void fgPlatformInitialiseInputDevices( void );
 void fgPlatformCloseInputDevices( void );
 
+static void fghXdgWmBasePing( void *data,
+                              struct xdg_wm_base *xdg_wm_base,
+                              uint32_t serial )
+{
+	xdg_wm_base_pong(xdg_wm_base, serial);
+}
+
+static const struct xdg_wm_base_listener fghXdgWmBaseListener = {
+	.ping = fghXdgWmBasePing,
+};
 
 static void fghRegistryGlobal( void* data,
                                struct wl_registry* registry,
@@ -43,18 +53,21 @@ static void fghRegistryGlobal( void* data,
 {
     SFG_PlatformDisplay* pDisplay = data;
 
-    if ( ! strcmp( interface, "wl_compositor" ) )
-      pDisplay->compositor = wl_registry_bind ( registry, id,
-                                                &wl_compositor_interface, 1 );
-    else if ( ! strcmp( interface, "wl_shell" ) )
-      pDisplay->shell = wl_registry_bind ( registry, id,
-                                           &wl_shell_interface, 1 );
-    else if ( ! strcmp( interface, "wl_seat" ) )
-      pDisplay->seat = wl_registry_bind ( registry, id,
-                                          &wl_seat_interface, 1 );
-    else if ( ! strcmp( interface, "wl_shm" ) )
+    if ( strcmp( interface, wl_shm_interface.name ) == 0 )
       pDisplay->shm = wl_registry_bind ( registry, id,
                                          &wl_shm_interface, 1 );
+    else if ( strcmp( interface, wl_compositor_interface.name ) == 0 )
+      pDisplay->compositor = wl_registry_bind ( registry, id,
+                                                &wl_compositor_interface, 1 );
+    else if ( strcmp( interface, xdg_wm_base_interface.name ) == 0 )
+    {
+      pDisplay->xdg_wm_base = wl_registry_bind ( registry, id,
+                                           &xdg_wm_base_interface, 1 );
+      xdg_wm_base_add_listener(pDisplay->xdg_wm_base, &fghXdgWmBaseListener, pDisplay);
+    }
+    else if ( strcmp( interface, wl_seat_interface.name ) == 0 )
+      pDisplay->seat = wl_registry_bind ( registry, id,
+                                           &wl_seat_interface, 1 );
 }
 static void fghRegistryGlobalRemove( void* data,
                                      struct wl_registry* registry,
@@ -89,11 +102,17 @@ void fgPlatformInitialize( const char* displayName )
                               &fgDisplay.pDisplay );
     wl_display_roundtrip( fgDisplay.pDisplay.display );
 
-    if( fgDisplay.pDisplay.compositor == NULL ||
-        fgDisplay.pDisplay.shell == NULL ||
-        fgDisplay.pDisplay.seat == NULL ||
-        fgDisplay.pDisplay.shm == NULL )
-          fgError( "failed to discover all needed compositor interfaces" );
+    if ( fgDisplay.pDisplay.shm == NULL )
+      fgError ( "wl_shm protocol not found" );
+
+    if ( fgDisplay.pDisplay.compositor == NULL )
+      fgError ( "wl_compositor protocol not found" );
+
+    if ( fgDisplay.pDisplay.xdg_wm_base == NULL )
+      fgError ( "xdg_wm_base protocol not found" );
+
+    if ( fgDisplay.pDisplay.seat == NULL )
+      fgError ( "wl_seat protocol not found" );
 
     fghInitialiseCursorTheme();
 
@@ -125,7 +144,7 @@ void fgPlatformCloseDisplay ( void )
 
     wl_shm_destroy( fgDisplay.pDisplay.shm );
     wl_seat_destroy( fgDisplay.pDisplay.seat );
-    wl_shell_destroy( fgDisplay.pDisplay.shell );
+    xdg_wm_base_destroy( fgDisplay.pDisplay.xdg_wm_base );
     wl_compositor_destroy( fgDisplay.pDisplay.compositor );
     wl_registry_destroy( fgDisplay.pDisplay.registry );
 
